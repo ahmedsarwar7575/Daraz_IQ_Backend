@@ -13,7 +13,7 @@ const asBoolean = (value, fallback = false) => {
 }
 
 const port = Number(process.env.PORT || 4000)
-const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:${port}`
+const apiBaseUrl = (process.env.API_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`).replace(/\/+$/, '')
 
 const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
