@@ -27,7 +27,7 @@ const authenticate = asyncHandler(async (req, _res, next) => {
 const authenticateMcp = asyncHandler(async (req, res, next) => {
   const [scheme, token] = String(req.headers.authorization || '').split(' ')
   if (scheme !== 'Bearer' || !token) {
-    res.set('WWW-Authenticate', mcpAuthChallenge())
+    res.set('WWW-Authenticate', mcpAuthChallenge(req))
     throw new ApiError(401, 'Authentication is required.', 'UNAUTHORIZED')
   }
 
@@ -35,23 +35,23 @@ const authenticateMcp = asyncHandler(async (req, res, next) => {
   try {
     payload = jwt.verify(token, env.jwtSecret)
   } catch {
-    res.set('WWW-Authenticate', mcpAuthChallenge())
+    res.set('WWW-Authenticate', mcpAuthChallenge(req))
     throw new ApiError(401, 'Your MCP session has expired.', 'SESSION_EXPIRED')
   }
 
   if (payload.token_use === 'mcp_access') {
     const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
-    const validAudience = audience.map((value) => String(value || '').replace(/\/+$/, '')).includes(mcpResource())
-    const validIssuer = payload.iss === issuer()
+    const validAudience = audience.map((value) => String(value || '').replace(/\/+$/, '')).includes(mcpResource(req))
+    const validIssuer = payload.iss === issuer(req)
     if (!validAudience || !validIssuer) {
-      res.set('WWW-Authenticate', mcpAuthChallenge())
+      res.set('WWW-Authenticate', mcpAuthChallenge(req))
       throw new ApiError(401, 'MCP token is not valid for this server.', 'INVALID_TOKEN')
     }
   }
 
   const user = await User.findByPk(payload.sub)
   if (!user) {
-    res.set('WWW-Authenticate', mcpAuthChallenge())
+    res.set('WWW-Authenticate', mcpAuthChallenge(req))
     throw new ApiError(401, 'User account was not found.', 'UNAUTHORIZED')
   }
 

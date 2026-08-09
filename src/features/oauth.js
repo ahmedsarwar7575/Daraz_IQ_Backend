@@ -17,10 +17,36 @@ const router = express.Router()
 const supportedAuthMethods = ['none', 'client_secret_post', 'client_secret_basic']
 
 const trimSlash = (value) => String(value || '').replace(/\/+$/, '')
-const issuer = () => trimSlash(env.oauth.issuer || env.apiBaseUrl)
-const mcpResource = () => trimSlash(env.mcp.resourceUrl || `${issuer()}/api/mcp`)
-const protectedResourceMetadataUrl = () => `${issuer()}/.well-known/oauth-protected-resource/api/mcp`
-const authorizationServerMetadataUrl = () => `${issuer()}/.well-known/oauth-authorization-server`
+const firstHeader = (value) => {
+  const header = Array.isArray(value) ? value[0] : value
+  return String(header || '').split(',')[0].trim()
+}
+const isLoopbackUrl = (value) => {
+  try {
+    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+const requestOrigin = (req) => {
+  const host = firstHeader(req?.headers?.['x-forwarded-host']) || firstHeader(req?.headers?.host)
+  if (!host) return ''
+  const proto = firstHeader(req?.headers?.['x-forwarded-proto']) || req?.protocol || 'https'
+  return trimSlash(`${proto}://${host}`)
+}
+const issuer = (req) => {
+  const configured = trimSlash(env.oauth.issuer || env.apiBaseUrl)
+  const origin = requestOrigin(req)
+  if (origin && isLoopbackUrl(configured) && !isLoopbackUrl(origin)) return origin
+  return configured
+}
+const mcpResource = (req) => {
+  const configured = trimSlash(env.mcp.resourceUrl)
+  const origin = requestOrigin(req)
+  if (configured && !(origin && isLoopbackUrl(configured) && !isLoopbackUrl(origin))) return configured
+  return `${issuer(req)}/api/mcp`
+}
+const protectedResourceMetadataUrl = (req) => `${issuer(req)}/.well-known/oauth-protected-resource/api/mcp`
 const supportedScope = () => env.mcp.scopes.join(' ')
 
 const escapeHtml = (value) => String(value || '')
@@ -64,19 +90,19 @@ const isAllowedRedirectUri = (value) => {
 
 const sameUri = (left, right) => trimSlash(left) === trimSlash(right)
 
-const protectedResourceMetadata = () => ({
-  resource: mcpResource(),
+const protectedResourceMetadata = (req) => ({
+  resource: mcpResource(req),
   resource_name: 'SellerDesk Daraz MCP',
-  authorization_servers: [issuer()],
+  authorization_servers: [issuer(req)],
   scopes_supported: env.mcp.scopes,
   bearer_methods_supported: ['header'],
 })
 
-const authorizationServerMetadata = () => ({
-  issuer: issuer(),
-  authorization_endpoint: `${issuer()}/api/oauth/authorize`,
-  token_endpoint: `${issuer()}/api/oauth/token`,
-  registration_endpoint: `${issuer()}/api/oauth/register`,
+const authorizationServerMetadata = (req) => ({
+  issuer: issuer(req),
+  authorization_endpoint: `${issuer(req)}/api/oauth/authorize`,
+  token_endpoint: `${issuer(req)}/api/oauth/token`,
+  registration_endpoint: `${issuer(req)}/api/oauth/register`,
   response_types_supported: ['code'],
   grant_types_supported: ['authorization_code'],
   code_challenge_methods_supported: ['S256'],
@@ -86,8 +112,8 @@ const authorizationServerMetadata = () => ({
   client_id_metadata_document_supported: false,
 })
 
-const mcpAuthChallenge = () => (
-  `Bearer resource_metadata="${protectedResourceMetadataUrl()}", scope="${supportedScope()}"`
+const mcpAuthChallenge = (req) => (
+  `Bearer resource_metadata="${protectedResourceMetadataUrl(req)}", scope="${supportedScope()}"`
 )
 
 const oauthErrorRedirect = (redirectUri, error, description, state) => {
@@ -161,7 +187,7 @@ const renderAuthorizePage = ({ params, client, error = '' }) => {
 </html>`
 }
 
-const validateAuthorizationParams = async (params) => {
+const validateAuthorizationParams = async (params, req) => {
   if (params.response_type !== 'code') {
     throw new ApiError(400, 'Only authorization code flow is supported.', 'UNSUPPORTED_RESPONSE_TYPE')
   }
@@ -171,7 +197,7 @@ const validateAuthorizationParams = async (params) => {
   if (!params.code_challenge || params.code_challenge_method !== 'S256') {
     throw new ApiError(400, 'PKCE S256 is required.', 'PKCE_REQUIRED')
   }
-  if (params.resource && !sameUri(params.resource, mcpResource())) {
+  if (params.resource && !sameUri(params.resource, mcpResource(req))) {
     throw new ApiError(400, 'Invalid MCP resource.', 'INVALID_RESOURCE')
   }
 
@@ -221,7 +247,7 @@ const verifyPkce = (verifier, challenge) => {
   return digest === challenge
 }
 
-const signMcpAccessToken = (user, { clientId, scope, resource }) => {
+const signMcpAccessToken = (req, user, { clientId, scope, resource }) => {
   const expiresIn = env.mcp.accessTokenExpiresIn
   return {
     accessToken: jwt.sign(
@@ -234,8 +260,8 @@ const signMcpAccessToken = (user, { clientId, scope, resource }) => {
       env.jwtSecret,
       {
         subject: user.id,
-        issuer: issuer(),
-        audience: trimSlash(resource || mcpResource()),
+        issuer: issuer(req),
+        audience: trimSlash(resource || mcpResource(req)),
         expiresIn,
       },
     ),
@@ -243,20 +269,20 @@ const signMcpAccessToken = (user, { clientId, scope, resource }) => {
   }
 }
 
-router.get('/oauth-protected-resource', (_req, res) => {
-  res.json(protectedResourceMetadata())
+router.get('/oauth-protected-resource', (req, res) => {
+  res.json(protectedResourceMetadata(req))
 })
 
-router.get('/oauth-protected-resource/api/mcp', (_req, res) => {
-  res.json(protectedResourceMetadata())
+router.get('/oauth-protected-resource/api/mcp', (req, res) => {
+  res.json(protectedResourceMetadata(req))
 })
 
-router.get('/oauth-authorization-server', (_req, res) => {
-  res.json(authorizationServerMetadata())
+router.get('/oauth-authorization-server', (req, res) => {
+  res.json(authorizationServerMetadata(req))
 })
 
-router.get('/openid-configuration', (_req, res) => {
-  res.json(authorizationServerMetadata())
+router.get('/openid-configuration', (req, res) => {
+  res.json(authorizationServerMetadata(req))
 })
 
 router.post('/api/oauth/register', asyncHandler(async (req, res) => {
@@ -298,13 +324,13 @@ router.post('/api/oauth/register', asyncHandler(async (req, res) => {
 
 router.get('/api/oauth/authorize', asyncHandler(async (req, res) => {
   const params = req.query
-  const client = await validateAuthorizationParams(params)
+  const client = await validateAuthorizationParams(params, req)
   res.type('html').send(renderAuthorizePage({ params, client }))
 }))
 
 router.post('/api/oauth/authorize', asyncHandler(async (req, res) => {
   const params = req.body
-  const client = await validateAuthorizationParams(params)
+  const client = await validateAuthorizationParams(params, req)
   const user = await User.findOne({ where: { email: normalizeEmail(req.body.email) } })
 
   if (!user?.passwordHash || !(await compareSecret(req.body.password, user.passwordHash))) {
@@ -333,7 +359,7 @@ router.post('/api/oauth/authorize', asyncHandler(async (req, res) => {
     clientId: client.clientId,
     redirectUri: params.redirect_uri,
     scope: normalizeScope(params.scope),
-    resource: trimSlash(params.resource || mcpResource()),
+    resource: trimSlash(params.resource || mcpResource(req)),
     codeChallenge: params.code_challenge,
     codeChallengeMethod: params.code_challenge_method,
     expiresAt: new Date(Date.now() + env.oauth.codeTtlMinutes * 60 * 1000),
@@ -341,7 +367,7 @@ router.post('/api/oauth/authorize', asyncHandler(async (req, res) => {
 
   const redirectUrl = new URL(params.redirect_uri)
   redirectUrl.searchParams.set('code', code)
-  redirectUrl.searchParams.set('iss', issuer())
+  redirectUrl.searchParams.set('iss', issuer(req))
   if (params.state) redirectUrl.searchParams.set('state', params.state)
   res.redirect(redirectUrl.toString())
 }))
@@ -375,7 +401,7 @@ router.post('/api/oauth/token', asyncHandler(async (req, res) => {
   const user = await User.findByPk(record.userId)
   if (!user) throw new ApiError(400, 'User account was not found.', 'INVALID_GRANT')
 
-  const token = signMcpAccessToken(user, {
+  const token = signMcpAccessToken(req, user, {
     clientId: client.clientId,
     scope: record.scope,
     resource: record.resource,
