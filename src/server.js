@@ -30,11 +30,12 @@ app.use((_req, res) => {
 })
 
 app.use((error, _req, res, _next) => {
-  if (env.nodeEnv !== 'production') console.error(error)
-  res.status(error.status || 500).json({
+  const status = error.status || 500
+  if (env.nodeEnv !== 'production' && status >= 500) console.error(error)
+  res.status(status).json({
     error: {
       code: error.code || 'INTERNAL_ERROR',
-      message: error.status ? error.message : 'Something went wrong.',
+      message: status < 500 ? error.message : 'Something went wrong.',
       ...(error.details && env.nodeEnv !== 'production' ? { details: error.details } : {}),
     },
   })
