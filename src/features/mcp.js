@@ -57,6 +57,15 @@ const getBearerToken = (req) => {
   return match ? match[1] : ''
 }
 
+const requestOrigin = (req) => {
+  const headers = req?.headers || {}
+  const forwardedHost = String(headers['x-forwarded-host'] || '').split(',')[0].trim()
+  const host = forwardedHost || headers.host
+  if (!host) return ''
+  const forwardedProto = String(headers['x-forwarded-proto'] || '').split(',')[0].trim()
+  return `${forwardedProto || req?.protocol || 'https'}://${host}`.replace(/\/+$/, '')
+}
+
 const createAuthInfo = (req) => ({
   token: getBearerToken(req),
   clientId: req.user.id,
@@ -68,8 +77,9 @@ const createAuthInfo = (req) => ({
   },
 })
 
-const registerTools = (server, user) => {
+const registerTools = (server, user, req) => {
   const userId = user.id
+  const withRequestOrigin = (input = {}) => ({ ...input, __requestOrigin: requestOrigin(req) })
 
   server.registerTool(
     'get_store_metrics',
@@ -78,7 +88,7 @@ const registerTools = (server, user) => {
       description: 'Fetch the seller store KPI snapshot for a date range and persist it for trend analysis.',
       inputSchema: z.object(dateRangeSchema),
     },
-    async (input) => jsonToolResult(await services.getStoreMetricsPayload(userId, input)),
+    async (input) => jsonToolResult(await services.getStoreMetricsPayload(userId, withRequestOrigin(input))),
   )
 
   server.registerTool(
@@ -100,7 +110,7 @@ const registerTools = (server, user) => {
       description: 'Compute metric-backed store findings, deltas, anomalies, and prioritized next actions.',
       inputSchema: z.object(dateRangeSchema),
     },
-    async (input) => jsonToolResult(await services.analyzeStorePerformancePayload(userId, input)),
+    async (input) => jsonToolResult(await services.analyzeStorePerformancePayload(userId, withRequestOrigin(input))),
   )
 
   server.registerTool(
@@ -357,13 +367,13 @@ const registerPrompts = (server) => {
   )
 }
 
-const createSellerMcpServer = (user) => {
+const createSellerMcpServer = (user, req) => {
   const server = new McpServer({
     name: 'sellerdesk-daraz-copilot',
     version: '1.0.0',
   })
 
-  registerTools(server, user)
+  registerTools(server, user, req)
   registerResources(server, user)
   registerPrompts(server)
 
@@ -373,7 +383,7 @@ const createSellerMcpServer = (user) => {
 router.all('/', authenticateMcp, asyncHandler(async (req, res) => {
   req.auth = createAuthInfo(req)
 
-  const server = createSellerMcpServer(req.user)
+  const server = createSellerMcpServer(req.user, req)
   const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   transport.onclose = () => {
     server.close().catch(() => {})

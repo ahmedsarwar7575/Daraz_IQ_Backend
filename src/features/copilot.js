@@ -262,31 +262,53 @@ const statusMatches = (order, pattern) => {
   return pattern.test(status)
 }
 
-const getConnectionContext = async (userId) => {
-  let connection = await DarazConnection.findOne({ where: { userId, disconnectedAt: null } })
-  if (!connection?.encryptedAccessToken) return null
-  connection = await darazFeature.refreshConnection(connection)
-  return {
-    connection,
-    accessToken: decrypt(connection.encryptedAccessToken),
-    apiUrl: darazFeature.marketApiUrl(connection),
+const safeDarazReconnectUrl = (userId, baseUrl = '') => {
+  try {
+    return darazFeature.createAuthorizationUrl(userId, baseUrl)
+  } catch {
+    return null
   }
 }
 
-const fetchStoreMetrics = async (userId, range) => {
-  const context = await getConnectionContext(userId)
-  if (!context) {
+const disconnectedStorePayload = (userId, reason = 'daraz_connection', baseUrl = '') => ({
+  connected: false,
+  reconnectRequired: reason === 'daraz_auth',
+  reconnectUrl: reason === 'daraz_auth' ? safeDarazReconnectUrl(userId, baseUrl) : null,
+  metrics: {
+    orders: 0,
+    revenue: null,
+    cancelRate: null,
+    returnRate: null,
+    sellerRating: null,
+  },
+  sourceSummary: { synced: 0, total: 3, failed: [reason] },
+})
+
+const getConnectionContext = async (userId, baseUrl = '') => {
+  try {
+    let connection = await DarazConnection.findOne({ where: { userId, disconnectedAt: null } })
+    if (!connection?.encryptedAccessToken) return null
+    connection = await darazFeature.refreshConnection(connection)
     return {
-      connected: false,
-      metrics: {
-        orders: 0,
-        revenue: null,
-        cancelRate: null,
-        returnRate: null,
-        sellerRating: null,
-      },
-      sourceSummary: { synced: 0, total: 3, failed: ['daraz_connection'] },
+      connection,
+      accessToken: decrypt(connection.encryptedAccessToken),
+      apiUrl: darazFeature.marketApiUrl(connection),
     }
+  } catch (error) {
+    if (darazFeature.isReconnectRequiredError(error)) {
+      return { reconnectRequired: true, reason: 'daraz_auth', reconnectUrl: safeDarazReconnectUrl(userId, baseUrl) }
+    }
+    throw error
+  }
+}
+
+const fetchStoreMetrics = async (userId, range, baseUrl = '') => {
+  const context = await getConnectionContext(userId, baseUrl)
+  if (!context) {
+    return disconnectedStorePayload(userId, 'daraz_connection', baseUrl)
+  }
+  if (context.reconnectRequired) {
+    return disconnectedStorePayload(userId, context.reason, baseUrl)
   }
 
   const createdAfter = range.start.toISOString()
@@ -625,7 +647,7 @@ const analyzePricePayload = async (userId, input) => {
 
 const getStoreMetricsPayload = async (userId, input = {}) => {
   const range = dateRangeFrom(input)
-  const payload = await fetchStoreMetrics(userId, range)
+  const payload = await fetchStoreMetrics(userId, range, input.__requestOrigin)
   const snapshot = await saveStoreSnapshot(userId, range, payload)
   return {
     range: { from: compactDate(range.start), to: compactDate(range.end) },
@@ -654,7 +676,7 @@ const getMetricsHistoryPayload = async (userId, input = {}) => {
 
 const analyzeStorePerformancePayload = async (userId, input = {}) => {
   const range = dateRangeFrom(input)
-  const payload = await fetchStoreMetrics(userId, range)
+  const payload = await fetchStoreMetrics(userId, range, input.__requestOrigin)
   const snapshot = await saveStoreSnapshot(userId, range, payload)
   const history = await StoreSnapshot.findAll({
     where: {
@@ -664,12 +686,23 @@ const analyzeStorePerformancePayload = async (userId, input = {}) => {
     order: [['capturedAt', 'DESC']],
     limit: 6,
   })
+  const reconnectRecommendations = [{
+    severity: 'high',
+    title: 'Daraz reconnect required',
+    metric: `Synced ${payload.sourceSummary.synced}/${payload.sourceSummary.total} Daraz data sources`,
+    action: payload.reconnectUrl
+      ? 'Open the reconnectUrl and authorize Daraz again before using live store metrics.'
+      : 'Reconnect Daraz in SellerDesk before using live store metrics.',
+  }]
   return {
     range: { from: compactDate(range.start), to: compactDate(range.end) },
     snapshotId: snapshot.id,
+    connected: payload.connected,
+    reconnectRequired: payload.reconnectRequired,
+    reconnectUrl: payload.reconnectUrl,
     metrics: payload.metrics,
     sourceSummary: payload.sourceSummary,
-    recommendations: storeRecommendations(payload.metrics, history),
+    recommendations: payload.reconnectRequired ? reconnectRecommendations : storeRecommendations(payload.metrics, history),
     historyCompared: history.length,
   }
 }
