@@ -197,7 +197,9 @@ const createAuthorizationUrl = (userId, baseUrl = '') => {
   const url = new URL(env.daraz.authUrl)
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', env.daraz.appKey)
-  url.searchParams.set('redirect_uri', baseUrl ? `${trimSlash(baseUrl)}/api/daraz/callback` : env.daraz.redirectUri)
+  const redirectUri = process.env.DARAZ_REDIRECT_URI ||
+    (baseUrl ? `${trimSlash(baseUrl)}/api/daraz/callback` : env.daraz.redirectUri)
+  url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('state', state)
   url.searchParams.set('force_auth', 'true')
   return url.toString()
