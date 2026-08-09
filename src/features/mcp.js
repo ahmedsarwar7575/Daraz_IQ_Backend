@@ -2,7 +2,8 @@ const express = require('express')
 const { McpServer, ResourceTemplate } = require('@modelcontextprotocol/server')
 const { NodeStreamableHTTPServerTransport } = require('@modelcontextprotocol/node')
 const z = require('zod/v4')
-const { authenticate } = require('../middleware')
+const env = require('../config')
+const { authenticateMcp } = require('../middleware')
 const { asyncHandler } = require('../utils')
 const { services } = require('./copilot')
 
@@ -59,7 +60,7 @@ const getBearerToken = (req) => {
 const createAuthInfo = (req) => ({
   token: getBearerToken(req),
   clientId: req.user.id,
-  scopes: ['sellerdesk:read', 'sellerdesk:write', 'daraz:read'],
+  scopes: env.mcp.scopes,
   expiresAt: req.authPayload?.exp,
   extra: {
     userId: req.user.id,
@@ -369,7 +370,7 @@ const createSellerMcpServer = (user) => {
   return server
 }
 
-router.all('/', authenticate, asyncHandler(async (req, res) => {
+router.all('/', authenticateMcp, asyncHandler(async (req, res) => {
   req.auth = createAuthInfo(req)
 
   const server = createSellerMcpServer(req.user)

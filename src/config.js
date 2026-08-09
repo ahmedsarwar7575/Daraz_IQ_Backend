@@ -25,6 +25,15 @@ const env = {
   stateSecret: process.env.OAUTH_STATE_SECRET || process.env.JWT_SECRET || 'replace-this-development-state-secret',
   tokenEncryptionKey: process.env.TOKEN_ENCRYPTION_KEY || process.env.JWT_SECRET || 'replace-this-development-token-key',
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+  oauth: {
+    issuer: process.env.OAUTH_ISSUER || apiBaseUrl,
+    codeTtlMinutes: Number(process.env.OAUTH_CODE_TTL_MINUTES || 10),
+  },
+  mcp: {
+    resourceUrl: process.env.MCP_RESOURCE_URL || `${apiBaseUrl}/api/mcp`,
+    scopes: ['sellerdesk:read', 'sellerdesk:write', 'daraz:read'],
+    accessTokenExpiresIn: process.env.MCP_ACCESS_TOKEN_EXPIRES_IN || '1d',
+  },
   database: {
     url: process.env.DATABASE_URL || '',
     host: process.env.DB_HOST || 'localhost',

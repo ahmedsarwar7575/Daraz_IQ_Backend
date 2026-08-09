@@ -94,6 +94,89 @@ const OtpCode = sequelize.define('OtpCode', {
   },
 })
 
+const OAuthClient = sequelize.define('OAuthClient', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  clientId: {
+    type: DataTypes.STRING(260),
+    allowNull: false,
+    unique: true,
+  },
+  clientSecretHash: DataTypes.TEXT,
+  clientName: {
+    type: DataTypes.STRING(160),
+    allowNull: false,
+  },
+  redirectUris: {
+    type: DataTypes.JSONB,
+    defaultValue: [],
+  },
+  grantTypes: {
+    type: DataTypes.JSONB,
+    defaultValue: ['authorization_code'],
+  },
+  responseTypes: {
+    type: DataTypes.JSONB,
+    defaultValue: ['code'],
+  },
+  tokenEndpointAuthMethod: {
+    type: DataTypes.STRING(40),
+    defaultValue: 'none',
+  },
+  scope: DataTypes.TEXT,
+  metadata: {
+    type: DataTypes.JSONB,
+    defaultValue: {},
+  },
+  clientIdIssuedAt: {
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW,
+  },
+})
+
+const OAuthAuthorizationCode = sequelize.define('OAuthAuthorizationCode', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  codeHash: {
+    type: DataTypes.STRING(64),
+    allowNull: false,
+    unique: true,
+  },
+  userId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+  },
+  clientId: {
+    type: DataTypes.STRING(260),
+    allowNull: false,
+  },
+  redirectUri: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  scope: DataTypes.TEXT,
+  resource: DataTypes.TEXT,
+  codeChallenge: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+  },
+  codeChallengeMethod: {
+    type: DataTypes.STRING(20),
+    defaultValue: 'S256',
+  },
+  expiresAt: {
+    type: DataTypes.DATE,
+    allowNull: false,
+  },
+  consumedAt: DataTypes.DATE,
+})
+
 const DarazConnection = sequelize.define('DarazConnection', {
   id: {
     type: DataTypes.UUID,
@@ -318,6 +401,7 @@ const AiProviderSetting = sequelize.define('AiProviderSetting', {
 
 User.hasOne(DarazConnection, { foreignKey: 'userId', onDelete: 'CASCADE' })
 DarazConnection.belongsTo(User, { foreignKey: 'userId' })
+User.hasMany(OAuthAuthorizationCode, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(StoreSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(CompetitorSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(ProductSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
@@ -329,6 +413,8 @@ module.exports = {
   sequelize,
   User,
   OtpCode,
+  OAuthClient,
+  OAuthAuthorizationCode,
   DarazConnection,
   StoreSnapshot,
   CompetitorSnapshot,

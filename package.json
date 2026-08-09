@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/features/auth.js && node --check src/features/daraz.js && node --check src/features/copilot.js && node --check src/features/mcp.js && node --check src/features/settings.js"
+    "check": "node --check src/server.js && node --check src/features/auth.js && node --check src/features/daraz.js && node --check src/features/copilot.js && node --check src/features/mcp.js && node --check src/features/oauth.js && node --check src/features/settings.js"
   },
   "keywords": [],
   "author": "",
