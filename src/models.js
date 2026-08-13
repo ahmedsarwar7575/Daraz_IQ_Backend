@@ -324,7 +324,7 @@ const ProductSnapshot = sequelize.define('ProductSnapshot', {
   },
   source: {
     type: DataTypes.STRING(40),
-    defaultValue: 'sellerdesk_snapshot',
+    defaultValue: 'daraz_product_api',
   },
   metadata: {
     type: DataTypes.JSONB,

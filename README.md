@@ -46,8 +46,6 @@ backend/
       settings.js    # AI provider settings
     services/
       competitorScraper.js  # Playwright scraper owned by backend
-    data/
-      products.json         # Fallback competitor fixture data
     config.js
     middleware.js
     models.js
@@ -125,13 +123,7 @@ COMPETITOR_LIVE_SCRAPE_ENABLED=false
 COMPETITOR_SCRAPE_MAX_PAGES=1
 ```
 
-When live scraping is disabled or unavailable, the backend uses:
-
-```txt
-src/data/products.json
-```
-
-This keeps the product usable for demos and portfolio review without depending on live browser execution.
+When live scraping is disabled or unavailable, competitor results return a clean empty state with a warning. No dummy competitor products are served in production.
 
 ### MCP Server
 

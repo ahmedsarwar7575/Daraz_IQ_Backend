@@ -92,7 +92,7 @@ const sameUri = (left, right) => trimSlash(left) === trimSlash(right)
 
 const protectedResourceMetadata = (req) => ({
   resource: mcpResource(req),
-  resource_name: 'SellerDesk Daraz MCP',
+  resource_name: 'daraziq.store Daraz MCP',
   authorization_servers: [issuer(req)],
   scopes_supported: env.mcp.scopes,
   bearer_methods_supported: ['header'],
@@ -143,7 +143,7 @@ const renderAuthorizePage = ({ params, client, error = '' }) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Connect SellerDesk</title>
+  <title>Connect daraziq.store</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f6f8; color: #171c22; font-family: Inter, Arial, sans-serif; }
@@ -166,9 +166,9 @@ const renderAuthorizePage = ({ params, client, error = '' }) => {
 <body>
   <main>
     <header>
-      <div class="brand"><span class="mark">SD</span><span>SellerDesk</span></div>
+      <div class="brand"><span class="mark">IQ</span><span>daraziq.store</span></div>
       <h1>Connect ${escapeHtml(client.clientName)}</h1>
-      <p>Sign in to allow this MCP connector to access your SellerDesk workspace.</p>
+      <p>Sign in to allow this MCP connector to access your daraziq.store workspace.</p>
     </header>
     <form method="post" action="/api/oauth/authorize">
       ${hiddenFields}
@@ -379,7 +379,7 @@ router.post('/api/oauth/authorize', asyncHandler(async (req, res) => {
     res.status(403).type('html').send(renderAuthorizePage({
       params,
       client,
-      error: 'Verify your SellerDesk email before connecting MCP.',
+      error: 'Verify your daraziq.store email before connecting MCP.',
     }))
     return
   }

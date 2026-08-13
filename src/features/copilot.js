@@ -1,5 +1,4 @@
 const crypto = require('crypto')
-const fs = require('fs/promises')
 const path = require('path')
 const express = require('express')
 const { Op } = require('sequelize')
@@ -19,7 +18,6 @@ const { resolveAiProvider } = require('./settings')
 
 const router = express.Router()
 
-const fixturePath = process.env.COMPETITOR_SOURCE_FILE || path.join(__dirname, '..', 'data', 'products.json')
 const scraperPath = process.env.COMPETITOR_SCRAPER_FILE || path.join(__dirname, '..', 'services', 'competitorScraper.js')
 const scrapeLocks = new Map()
 
@@ -132,22 +130,6 @@ const buildSearchUrl = (query) => {
   return url.toString()
 }
 
-const readFixtureProducts = async (query, limit) => {
-  const raw = JSON.parse(await fs.readFile(fixturePath, 'utf8'))
-  const normalizedQuery = query.toLowerCase()
-  let products = (raw.products || [])
-    .map(normalizeProduct)
-    .filter((product) => product.title.toLowerCase().includes(normalizedQuery))
-
-  if (!products.length) products = (raw.products || []).map(normalizeProduct)
-  return {
-    sourceUrl: raw.sourceUrl,
-    scrapedAt: raw.scrapedAt,
-    source: 'sample_fixture',
-    products: products.slice(0, limit),
-  }
-}
-
 const scrapeProductsLive = async (query, limit) => {
   const key = query.toLowerCase()
   if (scrapeLocks.has(key)) return scrapeLocks.get(key)
@@ -199,10 +181,26 @@ const loadCompetitors = async (userId, query, limit = 12, refresh = false) => {
   }
 
   let payload
-  if (env.copilot.liveScrapeEnabled && refresh) {
-    payload = await scrapeProductsLive(normalizedQuery, limit).catch(() => null)
+  let scrapeWarning = ''
+  if (env.copilot.liveScrapeEnabled) {
+    payload = await scrapeProductsLive(normalizedQuery, limit).catch((error) => {
+      scrapeWarning = error.message || 'Live competitor scrape failed.'
+      return null
+    })
   }
-  if (!payload) payload = await readFixtureProducts(normalizedQuery, limit)
+  if (!payload) {
+    const source = env.copilot.liveScrapeEnabled ? 'live_scrape_failed' : 'live_scrape_disabled'
+    return {
+      query: normalizedQuery,
+      source,
+      sourceUrl: buildSearchUrl(normalizedQuery),
+      scrapedAt: now,
+      cachedUntil: null,
+      warning: scrapeWarning || 'Live competitor scraping is disabled. Enable COMPETITOR_LIVE_SCRAPE_ENABLED to fetch market listings.',
+      metrics: competitorMetrics([]),
+      products: [],
+    }
+  }
 
   const products = payload.products.map(normalizeProduct).slice(0, limit)
   const metrics = competitorMetrics(products)
@@ -259,6 +257,92 @@ const statusMatches = (order, pattern) => {
   return pattern.test(status)
 }
 
+const orderCreatedAt = (order) => (
+  order.created_at ||
+  order.createdAt ||
+  order.created_date ||
+  order.createTime ||
+  order.order_date ||
+  order.updated_at ||
+  order.updatedAt
+)
+
+const dayKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString().slice(0, 10)
+}
+
+const buildDailyOrders = (orders, start, end) => {
+  const counts = new Map()
+  const cursor = new Date(start)
+  cursor.setHours(0, 0, 0, 0)
+  const finalDay = new Date(end)
+  finalDay.setHours(0, 0, 0, 0)
+
+  while (cursor <= finalDay) {
+    counts.set(dayKey(cursor), 0)
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  for (const order of orders) {
+    const key = dayKey(orderCreatedAt(order))
+    if (key && counts.has(key)) counts.set(key, counts.get(key) + 1)
+  }
+
+  return [...counts.entries()].map(([date, ordersCount]) => ({ date, orders: ordersCount }))
+}
+
+const buildStatusBreakdown = (orders) => {
+  const counts = orders.reduce((items, order) => {
+    const raw = String(order.status || order.order_status || 'unknown').trim().toLowerCase() || 'unknown'
+    const label = raw.includes('cancel')
+      ? 'cancelled'
+      : raw.includes('return') || raw.includes('refund')
+        ? 'returned'
+        : raw.includes('ship') || raw.includes('deliver')
+          ? 'shipped'
+          : raw.includes('pending') || raw.includes('pack')
+            ? 'pending'
+            : raw
+    items[label] = (items[label] || 0) + 1
+    return items
+  }, {})
+
+  return Object.entries(counts)
+    .map(([status, count]) => ({ status, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+const orderItems = (order) => arrayFrom(
+  order.items,
+  order.order_items,
+  order.OrderItems,
+  order.orderItems,
+  order.item_list,
+)
+
+const buildTopProducts = (orders) => {
+  const byProduct = new Map()
+  for (const order of orders) {
+    for (const item of orderItems(order)) {
+      const title = item.name || item.title || item.product_name || item.item_name || item.sku || 'Unknown product'
+      const sku = item.sku || item.seller_sku || item.SellerSku || item.item_sku || null
+      const key = sku || title
+      const current = byProduct.get(key) || { title, sku, orders: 0, units: 0, revenue: 0 }
+      const quantity = numberFromText(item.quantity || item.qty || item.paid_quantity) || 1
+      current.orders += 1
+      current.units += quantity
+      current.revenue += (numberFromText(item.paid_price || item.item_price || item.price) || 0) * quantity
+      byProduct.set(key, current)
+    }
+  }
+
+  return [...byProduct.values()]
+    .sort((a, b) => b.units - a.units || b.orders - a.orders)
+    .slice(0, 5)
+}
+
 const safeDarazReconnectUrl = (userId, baseUrl = '') => {
   try {
     return darazFeature.createAuthorizationUrl(userId, baseUrl)
@@ -277,8 +361,14 @@ const disconnectedStorePayload = (userId, reason = 'daraz_connection', baseUrl =
     cancelRate: null,
     returnRate: null,
     sellerRating: null,
+    shipOnTimeRate: null,
   },
   sourceSummary: { synced: 0, total: 3, failed: [reason] },
+  charts: {
+    dailyOrders: [],
+    statusBreakdown: [],
+    topProducts: [],
+  },
 })
 
 const getConnectionContext = async (userId, baseUrl = '') => {
@@ -367,6 +457,11 @@ const fetchStoreMetrics = async (userId, range, baseUrl = '') => {
       failed: calls
         .map((call, index) => call.status === 'rejected' ? ['orders', 'finance', 'seller_metrics'][index] : null)
         .filter(Boolean),
+    },
+    charts: {
+      dailyOrders: buildDailyOrders(orders, range.start, range.end),
+      statusBreakdown: buildStatusBreakdown(orders),
+      topProducts: buildTopProducts(orders),
     },
   }
 }
@@ -458,6 +553,48 @@ const normalizeOwnProduct = (response, fallback = {}) => {
   }
 }
 
+const productsFromResponse = (response) => arrayFrom(
+  response?.data?.products,
+  response?.data?.Products,
+  response?.data?.items,
+  response?.data?.Items,
+  response?.products,
+  response?.Products,
+  response?.items,
+)
+
+const isDemoProduct = (product = {}) => {
+  const value = `${product.sku || ''} ${product.itemId || ''} ${product.title || ''} ${product.source || ''}`.toLowerCase()
+  return /demo-|sample|fixture|sellerdesk_snapshot/.test(value)
+}
+
+const saveRealProductSnapshot = async (userId, product) => {
+  if (!product.sku || !product.title || isDemoProduct(product)) return
+  const existing = await ProductSnapshot.findOne({
+    where: { userId, sku: product.sku },
+    order: [['capturedAt', 'DESC']],
+  })
+  const payload = {
+    userId,
+    itemId: product.itemId,
+    sku: product.sku,
+    title: product.title,
+    query: product.query || product.title,
+    price: product.price,
+    cost: product.cost,
+    stock: product.stock,
+    rating: product.rating,
+    reviewCount: product.reviewCount,
+    imageCount: product.imageCount,
+    imageUrl: product.imageUrl,
+    status: product.status || 'active',
+    source: 'daraz_product_api',
+    capturedAt: new Date(),
+  }
+  if (existing) await existing.update(payload)
+  else await ProductSnapshot.create(payload)
+}
+
 const publicProductSnapshot = (product) => ({
   id: product.id,
   itemId: product.itemId,
@@ -477,11 +614,52 @@ const publicProductSnapshot = (product) => ({
 })
 
 const listProductsPayload = async (userId) => {
+  const context = await getConnectionContext(userId)
+  if (context?.reconnectRequired) {
+    return {
+      connected: false,
+      reconnectRequired: true,
+      reconnectUrl: context.reconnectUrl,
+      products: [],
+      message: 'Reconnect Daraz to load your real product catalog.',
+    }
+  }
+
+  if (context) {
+    try {
+      const response = await darazFeature.darazRequest('/products/get', {
+        filter: 'all',
+        limit: 100,
+        offset: 0,
+      }, context.accessToken, context.apiUrl)
+      const products = productsFromResponse(response)
+        .map((product) => normalizeOwnProduct(product))
+        .filter((product) => product.sku && product.title && !isDemoProduct(product))
+      await Promise.all(products.map((product) => saveRealProductSnapshot(userId, product)))
+      return {
+        connected: true,
+        source: 'daraz_product_api',
+        products,
+      }
+    } catch (error) {
+      return {
+        connected: true,
+        source: 'daraz_product_api',
+        products: [],
+        warning: error.message || 'Daraz products could not be loaded.',
+      }
+    }
+  }
+
   const products = await ProductSnapshot.findAll({
     where: { userId },
     order: [['capturedAt', 'DESC'], ['title', 'ASC']],
   })
-  return { products: products.map(publicProductSnapshot) }
+  return {
+    connected: false,
+    source: 'database_cache',
+    products: products.map(publicProductSnapshot).filter((product) => !isDemoProduct(product)),
+  }
 }
 
 const findProductSnapshot = async (userId, input = {}) => {
@@ -493,6 +671,7 @@ const findProductSnapshot = async (userId, input = {}) => {
   return ProductSnapshot.findOne({
     where: {
       userId,
+      source: { [Op.notIn]: ['demo_seed', 'sample_fixture', 'sellerdesk_snapshot'] },
       [Op.or]: [
         { sku: { [Op.in]: identifiers } },
         { itemId: { [Op.in]: identifiers } },
@@ -503,8 +682,26 @@ const findProductSnapshot = async (userId, input = {}) => {
 }
 
 const fetchOwnProduct = async (userId, input) => {
+  const identifier = cleanQuery(input.productId || input.sku)
+  if (!identifier && !cleanQuery(input.title)) {
+    throw new ApiError(400, 'Select a real product or enter a SKU before analyzing.', 'PRODUCT_REQUIRED')
+  }
+
+  const context = await getConnectionContext(userId)
+  if (context && !context.reconnectRequired && identifier) {
+    const params = /^\d+$/.test(identifier) ? { item_id: identifier } : { seller_sku: identifier }
+    try {
+      const response = await darazFeature.darazRequest('/product/item/get', params, context.accessToken, context.apiUrl)
+      const product = normalizeOwnProduct(response, input)
+      await saveRealProductSnapshot(userId, product)
+      return product
+    } catch {
+      // Snapshot/manual fallback below keeps analysis usable when Daraz does not expose item details.
+    }
+  }
+
   const snapshot = await findProductSnapshot(userId, input)
-  if (snapshot) {
+  if (snapshot && !isDemoProduct(snapshot)) {
     return {
       itemId: snapshot.itemId || snapshot.id,
       sku: snapshot.sku,
@@ -517,26 +714,11 @@ const fetchOwnProduct = async (userId, input) => {
       imageCount: snapshot.imageCount,
       imageUrl: snapshot.imageUrl,
       query: snapshot.query || snapshot.title,
-      source: snapshot.source || 'sellerdesk_snapshot',
+      source: snapshot.source || 'daraz_product_api',
     }
   }
 
-  if (!input.productId) return normalizeOwnProduct(null, input)
-  const context = await getConnectionContext(userId)
-  if (!context) return normalizeOwnProduct(null, input)
-
-  const id = String(input.productId)
-  const params = /^\d+$/.test(id) ? { item_id: id } : { seller_sku: id }
-  try {
-    const response = await darazFeature.darazRequest('/product/item/get', params, context.accessToken, context.apiUrl)
-    return normalizeOwnProduct(response, input)
-  } catch (error) {
-    return {
-      ...normalizeOwnProduct(null, input),
-      source: 'manual_input',
-      apiWarning: error.message,
-    }
-  }
+  return normalizeOwnProduct(null, input)
 }
 
 const productRecommendations = (ownProduct, competitors) => {
@@ -547,6 +729,15 @@ const productRecommendations = (ownProduct, competitors) => {
   const competitorTitleMedian = median(competitors.map((product) => product.title.length))
   const priceRank = pricePercentile(ownPrice, prices)
   const findings = []
+
+  if (!competitors.length) {
+    return [{
+      severity: 'medium',
+      title: 'No competitor listings loaded',
+      metric: `Product: ${ownProduct.title || ownProduct.sku || 'selected product'}`,
+      action: 'Enable live competitor scraping and run analysis again to compare price, sales, reviews, and listing quality.',
+    }]
+  }
 
   if (Number.isFinite(ownPrice) && Number.isFinite(metrics.medianPrice)) {
     const gap = Math.round(((ownPrice - metrics.medianPrice) / metrics.medianPrice) * 1000) / 10
@@ -605,7 +796,7 @@ const analyzePricePayload = async (userId, input) => {
     throw new ApiError(400, 'Current price is required for price analysis.', 'CURRENT_PRICE_REQUIRED')
   }
 
-  const competitors = await loadCompetitors(userId, input.query || input.sku, Number(input.limit || 12), false)
+  const competitors = await loadCompetitors(userId, input.query || input.sku, Number(input.limit || 12), input.refresh !== false)
   const metrics = competitors.metrics
   const guardrails = await getGuardrails(userId)
   const cost = numberFromText(input.cost)
@@ -632,6 +823,7 @@ const analyzePricePayload = async (userId, input) => {
     deltaPercent: Math.round(((recommendedPrice - currentPrice) / currentPrice) * 1000) / 10,
     pricePercentile: pricePercentile(currentPrice, competitors.products.map((product) => product.price)),
     competitorMetrics: metrics,
+    competitors,
     guardrails: publicGuardrails(guardrails),
     rationale: [
       `Competitor median: ${metrics.medianPrice ?? 'not available'}`,
@@ -689,7 +881,7 @@ const analyzeStorePerformancePayload = async (userId, input = {}) => {
     metric: `Synced ${payload.sourceSummary.synced}/${payload.sourceSummary.total} Daraz data sources`,
     action: payload.reconnectUrl
       ? 'Open the reconnectUrl and authorize Daraz again before using live store metrics.'
-      : 'Reconnect Daraz in SellerDesk before using live store metrics.',
+      : 'Reconnect Daraz in daraziq.store before using live store metrics.',
   }]
   return {
     range: { from: compactDate(range.start), to: compactDate(range.end) },
@@ -699,6 +891,7 @@ const analyzeStorePerformancePayload = async (userId, input = {}) => {
     reconnectUrl: payload.reconnectUrl,
     metrics: payload.metrics,
     sourceSummary: payload.sourceSummary,
+    charts: payload.charts || {},
     recommendations: payload.reconnectRequired ? reconnectRecommendations : storeRecommendations(payload.metrics, history),
     historyCompared: history.length,
   }
@@ -719,7 +912,7 @@ const analyzeProductPayload = async (userId, input = {}) => {
     userId,
     input.query || ownProduct.title,
     Number(input.limit || 12),
-    Boolean(input.refresh),
+    input.refresh !== false,
   )
   const computed = {
     ownPrice: ownProduct.price,
@@ -799,15 +992,38 @@ const extractOpenRouterText = (data) => {
   return ''
 }
 
+const cleanAiBriefText = (value) => String(value || '')
+  .split('\n')
+  .map((line) => line
+    .replace(/^user safety:\s*safe\.?$/i, '')
+    .replace(/^safety:\s*safe\.?$/i, '')
+    .replace(/\*\*/g, '')
+    .replace(/\\\*/g, '*')
+    .trimEnd())
+  .filter((line, index, lines) => line.trim() || lines[index - 1]?.trim())
+  .join('\n')
+  .trim()
+
 const localAiBrief = (mode, payload) => {
   if (mode === 'store') {
     const metrics = payload.metrics || {}
     const actions = (payload.recommendations || []).slice(0, 3)
       .map((item, index) => `${index + 1}. ${item.title}: ${item.action}`)
       .join('\n')
+    if (Number(metrics.orders) === 0) {
+      return [
+        'Executive summary',
+        'No orders were found for the selected date range, so there is not enough sales activity to calculate revenue trends or conversion signals.',
+        '',
+        'Recommended actions',
+        actions || 'Check listing visibility, stock status, product pricing, and competitor positioning before increasing ads or discounts.',
+      ].join('\n')
+    }
     return [
-      'The selected AI provider is not configured, so this brief was generated locally from store metrics.',
+      'Executive summary',
       `Orders: ${metrics.orders ?? 'not available'}. Revenue: ${metrics.revenue ?? 'not available'}. Cancel rate: ${metrics.cancelRate ?? 'not available'}.`,
+      '',
+      'Recommended actions',
       actions || 'No recommendations are available yet.',
     ].join('\n\n')
   }
@@ -819,30 +1035,36 @@ const localAiBrief = (mode, payload) => {
       .map((item, index) => `${index + 1}. ${item.title}: ${item.action}`)
       .join('\n')
     return [
-      'The selected AI provider is not configured, so this brief was generated locally from the product benchmark.',
+      'Executive summary',
       `${own.title || 'Product'} is at price ${computed.ownPrice ?? 'not available'} with competitor median ${computed.competitorMedianPrice ?? 'not available'}.`,
+      '',
+      'Recommended actions',
       actions || 'No product recommendations are available yet.',
     ].join('\n\n')
   }
 
   const rationale = (payload.rationale || []).map((item) => `- ${item}`).join('\n')
   return [
-    'The selected AI provider is not configured, so this brief was generated locally from the pricing analysis.',
+    'Executive summary',
     `SKU ${payload.sku || 'not provided'}: current price ${payload.currentPrice ?? 'not available'}, recommended price ${payload.recommendedPrice ?? 'not available'}, delta ${payload.deltaPercent ?? 'not available'}%.`,
+    '',
+    'Pricing rationale',
     rationale || 'No pricing rationale is available yet.',
   ].join('\n\n')
 }
 
 const buildAiPrompt = (mode, payload, user) => `
-You are SellerDesk AI, a professional ecommerce operating analyst for Daraz sellers.
+You are daraziq.store AI, a professional ecommerce operating analyst for Daraz sellers.
 Write a concise SaaS-style brief for the authenticated seller.
 
 Rules:
 - Use only the structured data below.
 - Do not invent orders, revenue, prices, ratings, stock, or competitor numbers.
 - Cite exact metrics when you recommend an action.
+- If orders are 0, clearly say no order activity was found for the selected range.
+- Do not include safety labels, policy labels, markdown tables, or raw JSON.
 - Keep the tone professional, direct, and practical.
-- Use these sections: Executive summary, What changed, Recommended actions, Risk checks.
+- Use these plain sections: Executive summary, What changed, Recommended actions, Risk checks.
 - Keep it under 220 words.
 
 Seller:
@@ -910,7 +1132,7 @@ const callAiBrief = async (userId, mode, payload, user) => {
       providerLabel: aiProvider.label,
       model: aiProvider.model,
       warning: `${aiProvider.label} API key is not configured.`,
-      brief: localAiBrief(mode, payload),
+      brief: cleanAiBriefText(localAiBrief(mode, payload)),
     }
   }
 
@@ -926,7 +1148,7 @@ const callAiBrief = async (userId, mode, payload, user) => {
       providerLabel: aiProvider.label,
       model: aiProvider.model,
       usingUserKey: aiProvider.usingUserKey,
-      brief,
+      brief: cleanAiBriefText(brief),
     }
   } catch (error) {
     return {
@@ -937,7 +1159,7 @@ const callAiBrief = async (userId, mode, payload, user) => {
       model: aiProvider.model,
       usingUserKey: aiProvider.usingUserKey,
       warning: error.message,
-      brief: localAiBrief(mode, payload),
+      brief: cleanAiBriefText(localAiBrief(mode, payload)),
     }
   }
 }

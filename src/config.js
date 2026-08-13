@@ -81,7 +81,7 @@ const env = {
     model: process.env.OPENROUTER_MODEL || 'openrouter/free',
     baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     siteUrl: process.env.OPENROUTER_SITE_URL || process.env.FRONTEND_URL || 'http://localhost:5173',
-    appName: process.env.OPENROUTER_APP_NAME || 'SellerDesk',
+    appName: process.env.OPENROUTER_APP_NAME || 'daraziq.store',
   },
 }
 

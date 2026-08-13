@@ -145,6 +145,123 @@ const extractCount = (response, fallback) => {
   return value === undefined ? fallback : Number(value)
 }
 
+const arrayFrom = (...values) => values.find((value) => Array.isArray(value)) || []
+
+const orderList = (response) => arrayFrom(
+  response?.data?.orders,
+  response?.data?.Orders,
+  response?.orders,
+  response?.Orders,
+)
+
+const productList = (response) => arrayFrom(
+  response?.data?.products,
+  response?.data?.Products,
+  response?.data?.items,
+  response?.products,
+  response?.Products,
+)
+
+const startOfMonth = () => {
+  const date = new Date()
+  date.setDate(1)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+const startOfYear = () => {
+  const date = new Date()
+  date.setMonth(0, 1)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
+const dayKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString().slice(0, 10)
+}
+
+const orderCreatedAt = (order) => (
+  order.created_at ||
+  order.createdAt ||
+  order.created_date ||
+  order.createTime ||
+  order.order_date ||
+  order.updated_at ||
+  order.updatedAt
+)
+
+const buildDailyOrders = (orders, days = 30) => {
+  const counts = new Map()
+  const start = new Date()
+  start.setDate(start.getDate() - (days - 1))
+  start.setHours(0, 0, 0, 0)
+
+  for (let i = 0; i < days; i += 1) {
+    const date = new Date(start)
+    date.setDate(start.getDate() + i)
+    counts.set(dayKey(date), 0)
+  }
+
+  for (const order of orders) {
+    const key = dayKey(orderCreatedAt(order))
+    if (key && counts.has(key)) counts.set(key, counts.get(key) + 1)
+  }
+
+  return [...counts.entries()].map(([date, ordersCount]) => ({ date, orders: ordersCount }))
+}
+
+const buildStatusBreakdown = (orders) => {
+  const counts = orders.reduce((items, order) => {
+    const raw = String(order.status || order.order_status || 'unknown').trim().toLowerCase() || 'unknown'
+    const label = raw.includes('cancel')
+      ? 'cancelled'
+      : raw.includes('return') || raw.includes('refund')
+        ? 'returned'
+        : raw.includes('ship') || raw.includes('deliver')
+          ? 'shipped'
+          : raw.includes('pending') || raw.includes('pack')
+            ? 'pending'
+            : raw
+    items[label] = (items[label] || 0) + 1
+    return items
+  }, {})
+
+  return Object.entries(counts)
+    .map(([status, count]) => ({ status, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+const orderItems = (order) => arrayFrom(
+  order.items,
+  order.order_items,
+  order.OrderItems,
+  order.orderItems,
+  order.item_list,
+)
+
+const buildTopProducts = (orders) => {
+  const byProduct = new Map()
+  for (const order of orders) {
+    for (const item of orderItems(order)) {
+      const title = item.name || item.title || item.product_name || item.item_name || item.sku || 'Unknown product'
+      const sku = item.sku || item.seller_sku || item.SellerSku || item.item_sku || null
+      const key = sku || title
+      const current = byProduct.get(key) || { title, sku, orders: 0, units: 0 }
+      const quantity = Number(item.quantity || item.qty || item.paid_quantity || 1)
+      current.orders += 1
+      current.units += Number.isFinite(quantity) ? quantity : 1
+      byProduct.set(key, current)
+    }
+  }
+  return [...byProduct.values()]
+    .sort((a, b) => b.units - a.units || b.orders - a.orders)
+    .slice(0, 5)
+}
+
+const countFrom = (response) => extractCount(response, null)
+
 const fetchSellerStats = async (connection) => {
   let accessToken
   try {
@@ -153,7 +270,10 @@ const fetchSellerStats = async (connection) => {
     throw new ApiError(401, 'Reconnect your Daraz account.', 'DARAZ_RECONNECT_REQUIRED')
   }
   const apiUrl = marketApiUrl(connection)
+  const now = new Date()
   const createdAfter = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const monthStart = startOfMonth().toISOString()
+  const yearStart = startOfYear().toISOString()
   const results = await Promise.allSettled([
     darazRequest('/seller/get', {}, accessToken, apiUrl),
     darazRequest('/orders/get', {
@@ -162,14 +282,39 @@ const fetchSellerStats = async (connection) => {
       offset: 0,
       sort_direction: 'DESC',
     }, accessToken, apiUrl),
+    darazRequest('/orders/get', {
+      created_after: monthStart,
+      limit: 100,
+      offset: 0,
+      sort_direction: 'DESC',
+    }, accessToken, apiUrl),
+    darazRequest('/orders/get', {
+      created_after: yearStart,
+      limit: 100,
+      offset: 0,
+      sort_direction: 'DESC',
+    }, accessToken, apiUrl),
+    darazRequest('/orders/get', {
+      limit: 1,
+      offset: 0,
+      sort_direction: 'DESC',
+    }, accessToken, apiUrl),
     darazRequest('/products/get', { filter: 'all', limit: 1, offset: 0 }, accessToken, apiUrl),
+    darazRequest('/products/get', { filter: 'live', limit: 1, offset: 0 }, accessToken, apiUrl),
+    darazRequest('/products/get', { filter: 'pending', limit: 1, offset: 0 }, accessToken, apiUrl),
   ])
 
   const seller = results[0].status === 'fulfilled' ? results[0].value : null
   const orders = results[1].status === 'fulfilled' ? results[1].value : null
-  const products = results[2].status === 'fulfilled' ? results[2].value : null
+  const monthOrders = results[2].status === 'fulfilled' ? results[2].value : null
+  const yearOrders = results[3].status === 'fulfilled' ? results[3].value : null
+  const totalOrders = results[4].status === 'fulfilled' ? results[4].value : null
+  const products = results[5].status === 'fulfilled' ? results[5].value : null
+  const activeProducts = results[6].status === 'fulfilled' ? results[6].value : null
+  const draftProducts = results[7].status === 'fulfilled' ? results[7].value : null
   const sellerData = seller?.data || seller || {}
-  const now = new Date()
+  const recentOrders = orderList(orders)
+  const yearOrderRows = orderList(yearOrders)
 
   await connection.update({
     sellerId: sellerData.seller_id ? String(sellerData.seller_id) : connection.sellerId,
@@ -179,11 +324,26 @@ const fetchSellerStats = async (connection) => {
   })
 
   return {
-    ordersLast30Days: extractCount(orders, orders?.data?.orders?.length ?? null),
-    products: extractCount(products, products?.data?.products?.length ?? null),
-    synced: results.filter((result) => result.status === 'fulfilled').length,
-    totalSources: results.length,
+    ordersLast30Days: extractCount(orders, recentOrders.length),
+    ordersThisMonth: extractCount(monthOrders, orderList(monthOrders).length),
+    ordersThisYear: extractCount(yearOrders, yearOrderRows.length),
+    ordersTotal: countFrom(totalOrders) ?? extractCount(yearOrders, yearOrderRows.length),
+    products: extractCount(products, productList(products).length),
+    activeProducts: countFrom(activeProducts),
+    draftProducts: countFrom(draftProducts),
+    synced: [
+      seller,
+      orders,
+      products,
+    ].filter(Boolean).length,
+    totalSources: 3,
+    sourceLabels: ['Seller profile', 'Orders API', 'Product catalog'],
     lastSyncedAt: now,
+    charts: {
+      dailyOrders: buildDailyOrders(recentOrders, 30),
+      statusBreakdown: buildStatusBreakdown(recentOrders),
+      topProducts: buildTopProducts(yearOrderRows.length ? yearOrderRows : recentOrders),
+    },
   }
 }
 
