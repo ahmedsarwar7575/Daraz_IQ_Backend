@@ -19,9 +19,8 @@ const { resolveAiProvider } = require('./settings')
 
 const router = express.Router()
 
-const rootDir = path.resolve(__dirname, '..', '..', '..')
-const fixturePath = process.env.COMPETITOR_SOURCE_FILE || path.join(rootDir, 'test', 'products.json')
-const scraperPath = process.env.COMPETITOR_SCRAPER_FILE || path.join(rootDir, 'test', 'scrape-products.js')
+const fixturePath = process.env.COMPETITOR_SOURCE_FILE || path.join(__dirname, '..', 'data', 'products.json')
+const scraperPath = process.env.COMPETITOR_SCRAPER_FILE || path.join(__dirname, '..', 'services', 'competitorScraper.js')
 const scrapeLocks = new Map()
 
 const manifest = {
@@ -156,11 +155,9 @@ const scrapeProductsLive = async (query, limit) => {
   const job = (async () => {
     const { scrapeProducts } = require(scraperPath)
     const sourceUrl = buildSearchUrl(query)
-    const outputFile = path.join(rootDir, 'test', `products-${Date.now()}.json`)
     const result = await scrapeProducts(sourceUrl, {
       maxPages: env.copilot.scrapeMaxPages,
       headless: true,
-      outputFile,
     })
     return {
       sourceUrl,
