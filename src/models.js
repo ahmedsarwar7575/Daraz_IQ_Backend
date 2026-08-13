@@ -177,6 +177,35 @@ const OAuthAuthorizationCode = sequelize.define('OAuthAuthorizationCode', {
   consumedAt: DataTypes.DATE,
 })
 
+const OAuthRefreshToken = sequelize.define('OAuthRefreshToken', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  tokenHash: {
+    type: DataTypes.STRING(64),
+    allowNull: false,
+    unique: true,
+  },
+  userId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+  },
+  clientId: {
+    type: DataTypes.STRING(260),
+    allowNull: false,
+  },
+  scope: DataTypes.TEXT,
+  resource: DataTypes.TEXT,
+  expiresAt: {
+    type: DataTypes.DATE,
+    allowNull: false,
+  },
+  lastUsedAt: DataTypes.DATE,
+  revokedAt: DataTypes.DATE,
+})
+
 const DarazConnection = sequelize.define('DarazConnection', {
   id: {
     type: DataTypes.UUID,
@@ -402,6 +431,7 @@ const AiProviderSetting = sequelize.define('AiProviderSetting', {
 User.hasOne(DarazConnection, { foreignKey: 'userId', onDelete: 'CASCADE' })
 DarazConnection.belongsTo(User, { foreignKey: 'userId' })
 User.hasMany(OAuthAuthorizationCode, { foreignKey: 'userId', onDelete: 'CASCADE' })
+User.hasMany(OAuthRefreshToken, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(StoreSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(CompetitorSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
 User.hasMany(ProductSnapshot, { foreignKey: 'userId', onDelete: 'CASCADE' })
@@ -415,6 +445,7 @@ module.exports = {
   OtpCode,
   OAuthClient,
   OAuthAuthorizationCode,
+  OAuthRefreshToken,
   DarazConnection,
   StoreSnapshot,
   CompetitorSnapshot,

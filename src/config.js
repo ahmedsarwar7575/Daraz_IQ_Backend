@@ -32,7 +32,8 @@ const env = {
   mcp: {
     resourceUrl: process.env.MCP_RESOURCE_URL || `${apiBaseUrl}/api/mcp`,
     scopes: ['sellerdesk:read', 'sellerdesk:write', 'daraz:read'],
-    accessTokenExpiresIn: process.env.MCP_ACCESS_TOKEN_EXPIRES_IN || '1d',
+    accessTokenExpiresIn: process.env.MCP_ACCESS_TOKEN_EXPIRES_IN || '7d',
+    refreshTokenExpiresIn: process.env.MCP_REFRESH_TOKEN_EXPIRES_IN || '90d',
   },
   database: {
     url: process.env.DATABASE_URL || '',

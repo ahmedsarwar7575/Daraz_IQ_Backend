@@ -3,7 +3,7 @@ const express = require('express')
 const jwt = require('jsonwebtoken')
 const { Op } = require('sequelize')
 const env = require('../config')
-const { OAuthAuthorizationCode, OAuthClient, User } = require('../models')
+const { OAuthAuthorizationCode, OAuthClient, OAuthRefreshToken, User } = require('../models')
 const {
   ApiError,
   asyncHandler,
@@ -104,7 +104,7 @@ const authorizationServerMetadata = (req) => ({
   token_endpoint: `${issuer(req)}/api/oauth/token`,
   registration_endpoint: `${issuer(req)}/api/oauth/register`,
   response_types_supported: ['code'],
-  grant_types_supported: ['authorization_code'],
+  grant_types_supported: ['authorization_code', 'refresh_token'],
   code_challenge_methods_supported: ['S256'],
   token_endpoint_auth_methods_supported: supportedAuthMethods,
   scopes_supported: env.mcp.scopes,
@@ -269,6 +269,40 @@ const signMcpAccessToken = (req, user, { clientId, scope, resource }) => {
   }
 }
 
+const refreshTokenExpiresAt = () => (
+  new Date(Date.now() + durationSeconds(env.mcp.refreshTokenExpiresIn) * 1000)
+)
+
+const issueMcpRefreshToken = async ({ userId, clientId, scope, resource }) => {
+  const refreshToken = randomToken(48)
+  await OAuthRefreshToken.create({
+    tokenHash: tokenHash(refreshToken),
+    userId,
+    clientId,
+    scope,
+    resource,
+    expiresAt: refreshTokenExpiresAt(),
+  })
+  return refreshToken
+}
+
+const tokenResponse = async (req, user, { clientId, scope, resource }) => {
+  const accessToken = signMcpAccessToken(req, user, { clientId, scope, resource })
+  const refreshToken = await issueMcpRefreshToken({
+    userId: user.id,
+    clientId,
+    scope,
+    resource,
+  })
+  return {
+    access_token: accessToken.accessToken,
+    refresh_token: refreshToken,
+    token_type: 'Bearer',
+    expires_in: accessToken.expiresIn,
+    scope,
+  }
+}
+
 router.get('/oauth-protected-resource', (req, res) => {
   res.json(protectedResourceMetadata(req))
 })
@@ -302,7 +336,7 @@ router.post('/api/oauth/register', asyncHandler(async (req, res) => {
     clientSecretHash: clientSecret ? await hashSecret(clientSecret) : null,
     clientName: String(req.body.client_name || 'MCP client').slice(0, 160),
     redirectUris,
-    grantTypes: ['authorization_code'],
+    grantTypes: ['authorization_code', 'refresh_token'],
     responseTypes: ['code'],
     tokenEndpointAuthMethod,
     scope: normalizeScope(req.body.scope),
@@ -373,11 +407,35 @@ router.post('/api/oauth/authorize', asyncHandler(async (req, res) => {
 }))
 
 router.post('/api/oauth/token', asyncHandler(async (req, res) => {
-  if (req.body.grant_type !== 'authorization_code') {
-    throw new ApiError(400, 'Only authorization_code grant is supported.', 'UNSUPPORTED_GRANT_TYPE')
+  const client = await authenticateClient(req)
+
+  if (req.body.grant_type === 'refresh_token') {
+    const refreshRecord = await OAuthRefreshToken.findOne({
+      where: {
+        tokenHash: tokenHash(req.body.refresh_token),
+        clientId: client.clientId,
+        revokedAt: null,
+        expiresAt: { [Op.gt]: new Date() },
+      },
+    })
+    if (!refreshRecord) throw new ApiError(400, 'Refresh token is invalid or expired.', 'INVALID_GRANT')
+
+    await refreshRecord.update({ revokedAt: new Date(), lastUsedAt: new Date() })
+    const user = await User.findByPk(refreshRecord.userId)
+    if (!user) throw new ApiError(400, 'User account was not found.', 'INVALID_GRANT')
+
+    res.json(await tokenResponse(req, user, {
+      clientId: client.clientId,
+      scope: refreshRecord.scope,
+      resource: refreshRecord.resource,
+    }))
+    return
   }
 
-  const client = await authenticateClient(req)
+  if (req.body.grant_type !== 'authorization_code') {
+    throw new ApiError(400, 'Only authorization_code and refresh_token grants are supported.', 'UNSUPPORTED_GRANT_TYPE')
+  }
+
   const record = await OAuthAuthorizationCode.findOne({
     where: {
       codeHash: tokenHash(req.body.code),
@@ -401,18 +459,11 @@ router.post('/api/oauth/token', asyncHandler(async (req, res) => {
   const user = await User.findByPk(record.userId)
   if (!user) throw new ApiError(400, 'User account was not found.', 'INVALID_GRANT')
 
-  const token = signMcpAccessToken(req, user, {
+  res.json(await tokenResponse(req, user, {
     clientId: client.clientId,
     scope: record.scope,
     resource: record.resource,
-  })
-
-  res.json({
-    access_token: token.accessToken,
-    token_type: 'Bearer',
-    expires_in: token.expiresIn,
-    scope: record.scope,
-  })
+  }))
 }))
 
 module.exports = router
