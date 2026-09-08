@@ -3,7 +3,7 @@ const express = require('express')
 const jwt = require('jsonwebtoken')
 const axios = require('axios')
 const env = require('../config')
-const { DarazConnection } = require('../models')
+const { DarazConnection, ProductSnapshot, StoreSnapshot } = require('../models')
 const { authenticate } = require('../middleware')
 const { ApiError, asyncHandler, decrypt, encrypt } = require('../utils')
 
@@ -373,6 +373,49 @@ const publicConnection = (connection) => ({
   connectedAt: connection.connectedAt,
 })
 
+const isShowcaseConnection = (connection) => Boolean(
+  connection?.metadata?.showcaseDemo &&
+  connection?.metadata?.showcaseDataset,
+)
+
+const showcaseStatusStats = async (connection) => {
+  const snapshots = await StoreSnapshot.findAll({
+    where: { userId: connection.userId },
+    order: [['capturedAt', 'DESC']],
+    limit: 12,
+  })
+  const snapshot = snapshots.find((entry) => (
+    entry.sourceSummary?.showcaseDataset === connection.metadata?.showcaseDataset
+  )) || snapshots[0]
+  const metrics = snapshot?.metrics || {}
+  const sourceSummary = snapshot?.sourceSummary || {}
+  const productCount = await ProductSnapshot.count({ where: { userId: connection.userId } })
+
+  return {
+    ordersLast30Days: metrics.ordersLast30Days ?? metrics.orders ?? 0,
+    ordersThisMonth: metrics.ordersThisMonth ?? metrics.orders ?? 0,
+    ordersThisYear: metrics.ordersThisYear ?? metrics.ordersTotal ?? metrics.orders ?? 0,
+    ordersTotal: metrics.ordersTotal ?? metrics.ordersThisYear ?? metrics.orders ?? 0,
+    revenue: metrics.revenue ?? 0,
+    cancelRate: metrics.cancelRate ?? null,
+    returnRate: metrics.returnRate ?? null,
+    sellerRating: metrics.sellerRating ?? null,
+    shipOnTimeRate: metrics.shipOnTimeRate ?? null,
+    products: metrics.products ?? productCount,
+    activeProducts: metrics.activeProducts ?? productCount,
+    draftProducts: metrics.draftProducts ?? 0,
+    synced: sourceSummary.synced ?? 3,
+    totalSources: sourceSummary.total ?? 3,
+    sourceLabels: sourceSummary.sourceLabels || ['Seller profile', 'Orders history', 'Product catalog'],
+    lastSyncedAt: connection.lastSyncedAt || snapshot?.capturedAt || connection.connectedAt,
+    charts: metrics.charts || {
+      dailyOrders: [],
+      statusBreakdown: [],
+      topProducts: [],
+    },
+  }
+}
+
 router.get('/connect', authenticate, asyncHandler(async (req, res) => {
   res.json({ authorizationUrl: createAuthorizationUrl(req.user.id, requestBaseUrl(req)) })
 }))
@@ -401,6 +444,14 @@ router.get('/status', authenticate, asyncHandler(async (req, res) => {
   let connection = await DarazConnection.findOne({
     where: { userId: req.user.id, disconnectedAt: null },
   })
+  if (connection && isShowcaseConnection(connection) && !connection.encryptedAccessToken) {
+    return res.json({
+      connected: true,
+      showcase: true,
+      connection: publicConnection(connection),
+      stats: await showcaseStatusStats(connection),
+    })
+  }
   if (!connection?.encryptedAccessToken) return res.json({ connected: false })
 
   try {

@@ -158,7 +158,7 @@ const loadCompetitors = async (userId, query, limit = 12, refresh = false) => {
   if (!normalizedQuery) throw new ApiError(400, 'Search query is required.', 'QUERY_REQUIRED')
 
   const now = new Date()
-  const cached = !refresh && await CompetitorSnapshot.findOne({
+  const cached = await CompetitorSnapshot.findOne({
     where: {
       userId,
       query: normalizedQuery.toLowerCase(),
@@ -167,7 +167,7 @@ const loadCompetitors = async (userId, query, limit = 12, refresh = false) => {
     order: [['createdAt', 'DESC']],
   })
 
-  if (cached) {
+  if (cached && (!refresh || cached.source === 'showcase_market')) {
     const products = (cached.products || []).map(normalizeProduct).slice(0, limit)
     return {
       query: normalizedQuery,
@@ -371,6 +371,48 @@ const disconnectedStorePayload = (userId, reason = 'daraz_connection', baseUrl =
   },
 })
 
+const isShowcaseConnection = (connection) => Boolean(
+  connection?.metadata?.showcaseDemo &&
+  connection?.metadata?.showcaseDataset,
+)
+
+const loadShowcaseStorePayload = async (userId) => {
+  const connection = await DarazConnection.findOne({ where: { userId, disconnectedAt: null } })
+  if (!connection || !isShowcaseConnection(connection) || connection.encryptedAccessToken) return null
+
+  const snapshot = await StoreSnapshot.findOne({
+    where: { userId },
+    order: [['capturedAt', 'DESC']],
+  })
+  if (!snapshot) return null
+
+  const metrics = snapshot.metrics || {}
+  const sourceSummary = snapshot.sourceSummary || {}
+  return {
+    connected: true,
+    showcase: true,
+    metrics: {
+      orders: metrics.orders ?? metrics.ordersLast30Days ?? 0,
+      revenue: metrics.revenue ?? null,
+      cancelRate: metrics.cancelRate ?? null,
+      returnRate: metrics.returnRate ?? null,
+      sellerRating: metrics.sellerRating ?? null,
+      shipOnTimeRate: metrics.shipOnTimeRate ?? null,
+    },
+    sourceSummary: {
+      synced: sourceSummary.synced ?? 3,
+      total: sourceSummary.total ?? 3,
+      failed: sourceSummary.failed || [],
+      sourceLabels: sourceSummary.sourceLabels || ['Seller profile', 'Orders history', 'Product catalog'],
+    },
+    charts: metrics.charts || {
+      dailyOrders: [],
+      statusBreakdown: [],
+      topProducts: [],
+    },
+  }
+}
+
 const getConnectionContext = async (userId, baseUrl = '') => {
   try {
     let connection = await DarazConnection.findOne({ where: { userId, disconnectedAt: null } })
@@ -390,6 +432,9 @@ const getConnectionContext = async (userId, baseUrl = '') => {
 }
 
 const fetchStoreMetrics = async (userId, range, baseUrl = '') => {
+  const showcasePayload = await loadShowcaseStorePayload(userId)
+  if (showcasePayload) return showcasePayload
+
   const context = await getConnectionContext(userId, baseUrl)
   if (!context) {
     return disconnectedStorePayload(userId, 'daraz_connection', baseUrl)

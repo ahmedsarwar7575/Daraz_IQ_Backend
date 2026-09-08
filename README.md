@@ -1,306 +1,82 @@
-# daraziq.store Backend
+# daraziq.store Intelligence Platform
 
-Node/Express backend for daraziq.store, a Daraz seller intelligence SaaS with marketplace OAuth, encrypted seller credentials, AI-assisted analytics, competitor browser automation, pricing guardrails, and an MCP server for external AI clients.
+daraziq.store is a SaaS intelligence platform for Daraz sellers. It connects seller account data, product snapshots, competitor signals, AI briefs, pricing guardrails, and MCP access into one protected operating layer.
 
-This backend is the core product layer. Both the website and MCP clients call the same service functions, so seller analytics, product benchmarking, and pricing logic live once and are exposed through REST and MCP.
+This backend powers the product experience behind the website and external AI clients. It is responsible for account security, marketplace connection, seller-scoped analytics, product intelligence, pricing decisions, and MCP authorization.
 
-## Product Overview
+## Product Mission
 
-daraziq.store helps Daraz sellers connect their seller account and turn marketplace data into useful actions:
+Daraz sellers need faster answers before they change inventory, pricing, ads, or catalog strategy. daraziq.store gives sellers a single workspace to understand what changed, why it matters, and which action is safest under their own business rules.
 
-- Secure user authentication with email/password, OTP, Google sign-in, and JWT sessions.
-- Daraz Open Platform OAuth connection and disconnect flow.
-- Encrypted storage of Daraz access credentials.
-- Store KPI snapshots and performance analysis.
-- Product and competitor benchmarking.
-- Browser automation for competitor product discovery.
-- Guardrail-based pricing recommendations and reprice audit logs.
-- AI summaries using OpenAI or OpenRouter.
-- Remote MCP endpoint for Claude, ChatGPT-compatible agents, and other MCP clients.
+## Core Capabilities
 
-## Tech Stack
+- Seller authentication and account sessions.
+- Daraz seller connection and disconnect flow.
+- Encrypted storage for sensitive access credentials.
+- Store performance snapshots and historical trend context.
+- Product catalog snapshots for seller-owned listings.
+- Competitor market search and price-band analysis.
+- AI-supported business briefs for store, product, and pricing workflows.
+- Pricing guardrails for margin, movement limits, and auditability.
+- Reprice history so every recommendation or attempted price move is traceable.
+- OAuth-protected MCP tools for connected AI clients.
 
-- Node.js
-- Express 5
-- PostgreSQL
-- Sequelize ORM
-- JWT authentication
-- Nodemailer OTP delivery
-- Google Auth Library
-- Daraz Open Platform OAuth/API integration
-- Playwright browser automation
-- Model Context Protocol SDK
-- OpenAI-compatible chat completions through OpenAI/OpenRouter
+## SaaS Workflows
 
-## Architecture
+| Workflow | Outcome |
+| --- | --- |
+| Connect Store | Sellers authorize a Daraz account and bring seller context into the workspace. |
+| Review Performance | Sellers see orders, revenue, fulfillment signals, source sync, and trend context. |
+| Benchmark Products | Sellers compare their own listings against market price, reviews, sales, and listing signals. |
+| Control Pricing | Sellers receive recommendations bounded by cost, floor, ceiling, and movement rules. |
+| Use AI Briefs | Sellers get concise summaries grounded in the current workspace data. |
+| Connect MCP Clients | Authorized clients can call account-scoped seller tools through a protected MCP endpoint. |
 
-```txt
-backend/
-  src/
-    features/
-      auth.js        # Email/password, OTP, Google auth
-      daraz.js       # Daraz OAuth, token exchange, account status
-      copilot.js     # Store, product, competitor, pricing, AI services + REST routes
-      mcp.js         # MCP tools/resources/prompts over Streamable HTTP
-      oauth.js       # OAuth server for MCP connector authentication
-      settings.js    # AI provider settings
-    services/
-      competitorScraper.js  # Playwright scraper owned by backend
-    config.js
-    middleware.js
-    models.js
-    server.js
-    utils.js
-```
+## Security And Privacy Principles
 
-## Core API Areas
+- Sensitive credentials are encrypted before storage.
+- MCP access is tied to authorized seller identity and scoped tokens.
+- Pricing workflows keep audit records for review.
+- Live marketplace writes stay guarded by product controls.
+- Public documentation, product copy, screenshots, and demo content must not include personal information.
 
-### Authentication
+Do not publish real emails, customer names, access tokens, API keys, seller secrets, order records, private revenue data, or marketplace credentials in this README or any public-facing product material.
 
-- Register and verify email.
-- Login with email/password.
-- Request and verify OTP through Nodemailer.
-- Sign in with Google Identity Services.
-- Return a signed JWT session used by the frontend.
+## Demo Data Standard
 
-Main route group:
+Showcase workspaces may use synthetic seller data to demonstrate product value. Synthetic records can include realistic products, prices, reviews, stock, orders, and competitor bands, but they must not expose or impersonate a real customer, real seller account, or real private transaction history.
 
-```txt
-/api/auth
-```
+Demo data should remain scoped to the intended showcase account and must not change other users.
 
-### Daraz Integration
+## MCP Product Surface
 
-- Creates Daraz OAuth authorization URLs.
-- Handles the Daraz callback.
-- Exchanges authorization codes for seller access tokens.
-- Encrypts token data before saving it in PostgreSQL.
-- Supports disconnecting the Daraz account.
-- Returns reconnect states when stored Daraz credentials are invalid or expired.
+daraziq.store exposes an MCP interface so compatible AI clients can work with the same seller intelligence layer as the web app.
 
-Main route group:
-
-```txt
-/api/daraz
-```
-
-### Copilot Services
-
-The Copilot service layer powers both REST and MCP:
+Available product areas include:
 
 - Store metrics
-- Store history
+- Metrics history
 - Store performance analysis
 - Own product lookup
 - Competitor search
 - Product analysis
-- Anomaly detection
-- Pricing guardrails
-- Price recommendations
-- Reprice audit trail
-- AI business brief
+- Anomaly checks
+- Pricing analysis
+- Guarded reprice logging
+- Reprice history
 
-Main route group:
+MCP clients must authorize before accessing seller tools, and every tool runs in the context of the authenticated seller workspace.
 
-```txt
-/api/copilot
-```
+## AI Product Surface
 
-### Browser Automation
+AI briefs use structured seller data from daraziq.store. The platform should not invent orders, revenue, pricing, stock, reviews, ratings, or competitor metrics. Recommendations should stay practical, concise, and grounded in the displayed data.
 
-The Playwright scraper now lives inside the backend:
+## Product Voice
 
-```txt
-src/services/competitorScraper.js
-```
+daraziq.store should sound like a serious SaaS product for marketplace sellers:
 
-It can load Daraz search result pages, scroll lazy-loaded product cards, parse product titles, prices, sales counts, reviews, images, and URLs, then normalize the data for competitor benchmarking.
-
-Live scraping is controlled by env flags:
-
-```env
-COMPETITOR_LIVE_SCRAPE_ENABLED=false
-COMPETITOR_SCRAPE_MAX_PAGES=1
-```
-
-When live scraping is disabled or unavailable, competitor results return a clean empty state with a warning. No dummy competitor products are served in production.
-
-### MCP Server
-
-The backend exposes a remote MCP endpoint:
-
-```txt
-POST /api/mcp
-```
-
-It supports OAuth-based authentication for MCP clients. Claude or another MCP client does not guess the user identity; it receives an OAuth access token issued by this backend. The token subject maps to the daraziq.store user id, and every MCP tool runs against that authenticated seller.
-
-Available MCP tools include:
-
-- `get_store_metrics`
-- `get_metrics_history`
-- `analyze_store_performance`
-- `get_own_product`
-- `search_competitors`
-- `analyze_product`
-- `flag_anomalies`
-- `analyze_price`
-- `apply_reprice`
-- `get_reprice_history`
-
-OAuth discovery endpoints:
-
-```txt
-/.well-known/oauth-protected-resource/api/mcp
-/.well-known/oauth-authorization-server
-/.well-known/openid-configuration
-```
-
-### AI Provider Layer
-
-The backend can use:
-
-- OpenAI
-- OpenRouter
-
-Users can switch provider settings from the frontend. API keys can come from platform env variables or user-level encrypted settings.
-
-## Database
-
-The backend uses Sequelize models for:
-
-- Users
-- Email verification codes
-- OTP codes
-- Daraz connections
-- Store snapshots
-- Product snapshots
-- Competitor snapshots
-- Guardrail configs
-- Reprice logs
-- AI provider settings
-- OAuth clients
-- OAuth authorization codes
-- OAuth refresh tokens
-
-PostgreSQL is used in local development and production. Neon Postgres works well for deployment.
-
-## Environment Variables
-
-Copy `.env.example` to `.env`:
-
-```bash
-cp .env.example .env
-```
-
-Important production variables:
-
-```env
-NODE_ENV=production
-PORT=4000
-API_BASE_URL=https://your-backend-domain.com
-FRONTEND_URL=https://daraziq.store
-JWT_SECRET=generate-a-long-random-value
-OAUTH_STATE_SECRET=generate-another-long-random-value
-TOKEN_ENCRYPTION_KEY=generate-a-separate-long-random-value
-
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require
-DB_SSL=true
-
-DARAZ_APP_KEY=your-daraz-app-key
-DARAZ_APP_SECRET=your-daraz-app-secret
-DARAZ_REDIRECT_URI=https://your-backend-domain.com/api/daraz/callback
-
-MCP_RESOURCE_URL=https://your-backend-domain.com/api/mcp
-OAUTH_ISSUER=https://your-backend-domain.com
-MCP_ACCESS_TOKEN_EXPIRES_IN=7d
-MCP_REFRESH_TOKEN_EXPIRES_IN=90d
-```
-
-For AI:
-
-```env
-AI_PROVIDER=openrouter
-OPENROUTER_API_KEY=your-openrouter-key
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_SITE_URL=https://daraziq.store
-OPENROUTER_APP_NAME=daraziq.store
-```
-
-or:
-
-```env
-AI_PROVIDER=openai
-OPENAI_API_KEY=your-openai-key
-OPENAI_MODEL=gpt-5.6-terra
-```
-
-## Local Development
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run the API:
-
-```bash
-npm run dev
-```
-
-Health check:
-
-```txt
-http://localhost:4000/api/health
-```
-
-Run syntax checks:
-
-```bash
-npm run check
-```
-
-## Playwright Setup
-
-For live scraping, install Chromium:
-
-```bash
-npm run install:browsers
-```
-
-On production hosts such as Render, use a build command that installs dependencies and the browser binary:
-
-```bash
-npm install && npm run install:browsers
-```
-
-Then enable live scraping:
-
-```env
-COMPETITOR_LIVE_SCRAPE_ENABLED=true
-```
-
-## Deployment Notes
-
-Recommended production setup:
-
-- Backend on Render.
-- PostgreSQL on Neon.
-- Frontend on a static host using `https://daraziq.store`.
-- Daraz app callback set exactly to `https://your-backend-domain.com/api/daraz/callback`.
-- Claude MCP connector URL set to `https://your-backend-domain.com/api/mcp`.
-
-## Portfolio Highlights
-
-This backend demonstrates:
-
-- Marketplace OAuth integration with encrypted token storage.
-- Full-stack SaaS authentication patterns.
-- PostgreSQL schema design with Sequelize relationships.
-- AI provider abstraction across OpenAI and OpenRouter.
-- MCP server implementation with OAuth discovery and refresh-token support.
-- Browser automation integrated into backend services.
-- Cache-backed competitor intelligence workflows.
-- Guardrail-driven pricing logic and audit-friendly reprice logging.
-- Production deployment considerations for env, sessions, browser binaries, and external callbacks.
+- Clear and useful.
+- Security-aware without fear-based language.
+- Business-focused instead of developer-focused.
+- Honest about AI as decision support.
+- Specific about seller outcomes.
