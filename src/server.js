@@ -29,7 +29,7 @@ app.use('/api/mcp', mcpRoutes)
 app.use('/api/settings', settingsRoutes)
 
 app.use((_req, res) => {
-  res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route was not found.' } })
+  res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Route was not found..' } })
 })
 
 app.use((error, _req, res, _next) => {
