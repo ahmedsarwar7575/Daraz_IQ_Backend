@@ -52,6 +52,11 @@ const getMailer = () => {
     port: env.mail.port,
     secure: env.mail.secure,
     auth: { user: env.mail.user, pass: env.mail.password },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
+    disableFileAccess: true,
+    disableUrlAccess: true,
   })
   return mailer
 }
@@ -105,6 +110,7 @@ module.exports = {
   decrypt,
   encrypt,
   generateOtp,
+  getMailer,
   hashSecret,
   normalizeEmail,
   publicUser,

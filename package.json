@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
+    "test": "node --test tests/contact.test.js",
+    "dev:contact": "node scripts/contact-preview.js",
     "install:browsers": "playwright install chromium",
     "seed:showcase": "node scripts/seed-showcase-account.js",
     "check": "node --check src/server.js && node --check src/features/auth.js && node --check src/features/daraz.js && node --check src/features/copilot.js && node --check src/features/mcp.js && node --check src/features/oauth.js && node --check src/features/settings.js && node --check src/services/competitorScraper.js && node --check scripts/seed-showcase-account.js"
@@ -23,6 +25,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
     "google-auth-library": "^11.0.0",
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^9.0.3",

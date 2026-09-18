@@ -53,6 +53,10 @@ const env = {
     password: process.env.SMTP_PASSWORD || '',
     from: process.env.MAIL_FROM || 'Daraz Console <no-reply@example.com>',
   },
+  contact: {
+    recipient: process.env.CONTACT_RECIPIENT || 'ahmedsarwar7575@gmail.com',
+    trustProxyHops: Math.max(0, Math.min(5, Number(process.env.TRUST_PROXY_HOPS) || 0)),
+  },
   daraz: {
     appKey: process.env.DARAZ_APP_KEY || '',
     appSecret: process.env.DARAZ_APP_SECRET || '',
